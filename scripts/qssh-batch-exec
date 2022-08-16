@@ -1,0 +1,44 @@
+#!/bin/bash
+
+set -Eeuo pipefail
+
+# shellcheck source=${HOME}/workspace/developer-vagrant/scripts/qssh-generic-functions
+source "$( dirname "${BASH_SOURCE[0]}" )/qssh-generic-functions"
+# shellcheck source=${HOME}/workspace/developer-vagrant/scripts/qssh-override-functions
+source "$( dirname "${BASH_SOURCE[0]}" )/qssh-override-functions"
+
+all_instances_details ALL_INSTANCES_DETAILS
+
+filter_instances_details TARGET_INSTANCES_DETAILS "${ALL_INSTANCES_DETAILS}" "${@}"
+empty_check "${TARGET_INSTANCES_DETAILS}" "No target instances found"
+print_batch_confirmation "${TARGET_INSTANCES_DETAILS}" "Execute command on below instances"
+
+capture_argument BATCH_COMMAND "Enter command to be executed on targets"
+FAIL_SAFE_PRETTY_PRINT_BATCH_COMMAND="${BATCH_COMMAND}; echo ''; printf '%.0s_' {1..100}; echo '' || true"
+
+newline
+echo "Starting batch exec."
+printf '%.0s=' {1..100}
+newline
+for INSTANCE_DETAILS in $(echo -n "${TARGET_INSTANCES_DETAILS}" | jq -c '.[]' | sed 's| |SPACE|g'); do
+  set_instance_details_in_vars TARGET_IP TARGET_KEY TARGET_USER TARGET_VPC USE_BASTION SSH_PASS_COMMAND \
+    SSH_PASS_ARG SSH_KEY_ARG "${INSTANCE_DETAILS}"
+  if [[ "${USE_BASTION}" == "y" ]]; then
+    choose_bastion BASTION_IP BASTION_KEY BASTION_USER BASTION_SSH_PASS_COMMAND BASTION_SSH_PASS_ARG BASTION_SSH_KEY_ARG \
+      "${ALL_INSTANCES_DETAILS}" "${TARGET_VPC}"
+    newline
+    echo "Executing [${BATCH_COMMAND}] in ${TARGET_IP}"
+    newline
+    ${SSH_PASS_COMMAND} ${SSH_PASS_ARG} ssh -q -o StrictHostKeyChecking=no \
+      -o ProxyCommand="${BASTION_SSH_PASS_COMMAND} ${BASTION_SSH_PASS_ARG} ssh -q -o StrictHostKeyChecking=no ${BASTION_SSH_KEY_ARG} ${BASTION_KEY} ${BASTION_USER}@${BASTION_IP} -W %h:%p" \
+      ${SSH_KEY_ARG} ${TARGET_KEY} "${TARGET_USER}@${TARGET_IP}" "${FAIL_SAFE_PRETTY_PRINT_BATCH_COMMAND}"
+    unset BASTION_IP BASTION_KEY BASTION_USER
+  else
+    newline
+    echo "Executing [${BATCH_COMMAND}] in ${TARGET_IP}"
+    newline
+    ${SSH_PASS_COMMAND} ${SSH_PASS_ARG} ssh -q -o StrictHostKeyChecking=no \
+      ${SSH_KEY_ARG} ${TARGET_KEY} "${TARGET_USER}@${TARGET_IP}" "${FAIL_SAFE_PRETTY_PRINT_BATCH_COMMAND}"
+  fi
+  unset TARGET_IP TARGET_KEY TARGET_USER TARGET_VPC USE_BASTION
+done

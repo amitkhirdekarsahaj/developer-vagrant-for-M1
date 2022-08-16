@@ -1,0 +1,317 @@
+#!/bin/bash
+
+set -Eeuo pipefail
+
+KEYS_DIR="${SSH_KEYS_DIR:-${HOME}/.ssh-keys}"
+
+function newline() {
+  echo ""
+}
+
+function all_instances_details() {
+  local -n all_instances_details=${1}
+  all_instances_details=$(aws ec2 describe-instances --filters "Name=instance-state-code,Values=16" | jq -c '.Reservations | {instances: map(.Instances) | add} | .instances |=map({id: .InstanceId, key: .KeyName, name: .Tags[] | select(.Key=="Name") | .Value, vpc_id: .VpcId, private_ip: .NetworkInterfaces[0].PrivateIpAddress, public_ip: .NetworkInterfaces[0].Association.PublicIp}) | .instances |=sort_by(.name) | .instances')
+}
+
+function empty_check() {
+  local instances_details="${1}"
+  local message="${2}"
+  if [[ $(echo -n "${instances_details}" | jq 'length') -eq 0 ]]; then
+    newline
+    echo "${message}"
+    exit 1
+  fi
+}
+
+function print_instance_detail() {
+  local indexed_instances_details="${1}"
+  local instance_index="${2}"
+  instance_details=$(echo -n "${indexed_instances_details}" | jq -r ".[${instance_index}] | {detail: ((.name | gsub(\"[[:space:]]+\"; \"SPACE\")) + \"|\" + .public_ip + \"|\" + .private_ip )} | .detail")
+  name=$(echo -n "${instance_details}" | cut -d '|' -f 1 | sed 's|SPACE| |g')
+  public_ip=$(echo -n "${instance_details}" | cut -d '|' -f 2)
+  private_ip=$(echo -n "${instance_details}" | cut -d '|' -f 3)
+  [[ -z "${public_ip}" ]] && instance_ip="${private_ip}" || instance_ip="${public_ip}"
+  echo "${name} (${instance_ip})"
+}
+
+function print_instance_choice_options() {
+  local indexed_instances_details="${1}"
+  local message="${2}"
+  local max_index_length=$(($(echo -n "${indexed_instances_details}" | jq '. | map(.index | tostring | length) | max') + 1))
+  local max_name_length=$(($(echo -n "${indexed_instances_details}" | jq '. | map(.name | length) | max') + 1))
+  newline
+  echo "${message}"
+  newline
+  for option in $(echo -n "${indexed_instances_details}" | jq -r ".[] | {detail: ((.index|tostring) + \".|\" + (.name | gsub(\"[[:space:]]+\"; \"SPACE\")) + \"|\" + .public_ip + \"|\" + .private_ip )} | .detail")
+  do
+    index=$(echo -n "${option}" | cut -d '|' -f 1)
+    name=$(echo -n "${option}" | cut -d '|' -f 2 | sed 's|SPACE| |g')
+    public_ip=$(echo -n "${option}" | cut -d '|' -f 3)
+    private_ip=$(echo -n "${option}" | cut -d '|' -f 4)
+    [[ -z "${public_ip}" ]] && instance_ip="${private_ip}" || instance_ip="${public_ip}"
+    padded_index=$(printf %"${max_index_length}"s "${index}")
+    padded_name=$(printf %-"${max_name_length}"s "${name}")
+    echo " ${padded_index} ${padded_name} (${instance_ip})"
+  done
+}
+
+function print_batch_confirmation() {
+  local instances_details="${1}"
+  local message="${2}"
+  local max_name_length=$(($(echo -n "${instances_details}" | jq '. | map(.name | length) | max') + 1))
+  newline
+  echo "${message}"
+  newline
+  for option in $(echo -n "${instances_details}" | jq -r ".[] | {detail: ((.name | gsub(\"[[:space:]]+\"; \"SPACE\")) + \"|\" + .public_ip + \"|\" + .private_ip )} | .detail")
+  do
+    name=$(echo -n "${option}" | cut -d '|' -f 1 | sed 's|SPACE| |g')
+    public_ip=$(echo -n "${option}" | cut -d '|' -f 2)
+    private_ip=$(echo -n "${option}" | cut -d '|' -f 3)
+    [[ -z "${public_ip}" ]] && instance_ip="${private_ip}" || instance_ip="${public_ip}"
+    padded_name=$(printf %-"${max_name_length}"s "${name}")
+    echo " - ${padded_name} (${instance_ip})"
+  done
+  local confirmation_default="y"
+  newline
+  read -p "Proceed [y/n]? (y): " -n 1 confirmation
+  confirmation=$(echo -n "${confirmation:-${confirmation_default}}" | tr '[:upper:]' '[:lower:]')
+  if [[ "${confirmation}" != "y" ]]; then
+    exit 1
+  fi
+}
+
+function set_scp_vars() {
+  local -n message=${1}
+  local -n source_path=${2}
+  local -n target_path=${3}
+  local ltr_or_rtl="${4}"
+  local host_path="${5}"
+  local remote_path="${6}"
+  local remote_user="${7}"
+  local remote_ip="${8}"
+  if [[ "${ltr_or_rtl}" == "ltr" ]]; then
+    message="Copying ${host_path} on host to ${remote_path} on ${remote_ip}"
+    source_path="${host_path}"
+    target_path="${remote_user}@${remote_ip}:${remote_path}"
+  else
+    message="Copying ${remote_path} from ${remote_ip} to ${host_path}.${remote_ip} on host"
+    source_path="${remote_user}@${remote_ip}:${remote_path}"
+    target_path="${host_path}.${remote_ip}"
+  fi
+}
+
+function instance_ips() {
+  local -n instance_public_ip=${1}
+  local -n instance_private_ip=${2}
+  local instance_details=${3}
+  instance_public_ip=$(echo -n "${instance_details}" | jq -r '.public_ip + ""')
+  instance_private_ip=$(echo -n "${instance_details}" | jq -r '.private_ip + ""')
+}
+
+function ip_and_bation_usage() {
+  local -n instance_ip_ref=${1}
+  local -n use_bastion_ref=${2}
+  local instance_details=${3}
+  instance_ips public_ip private_ip "${instance_details}"
+  if [[ -z "${public_ip}" ]]; then
+    use_bastion_ref="y"
+    instance_ip_ref="${private_ip}"
+  else
+    use_bastion_ref="n"
+    instance_ip_ref="${public_ip}"
+  fi
+}
+
+function check_if_is_password_based_access_instance() {
+  local -n is_password_based_access_instance_ref=${1}
+  local instance_name="${2}"
+  is_password_based_access_instance_ref="no"
+}
+
+function select_and_set_instance_details_in_vars() {
+  local -n instance_ip=${1}
+  local -n instance_key=${2}
+  local -n instance_user=${3}
+  local -n instance_vpc=${4}
+  local -n use_bastion=${5}
+  local -n ssh_pass_command=${6}
+  local -n ssh_pass_arg=${7}
+  local -n ssh_key_arg=${8}
+  local instances_details=${9}
+  local context=${10}
+  local action=${11}
+  indexed_instances_details=$(echo -n "${instances_details}" | jq -c ". | to_entries | map({index:.key, id:.value.id, key:.value.key, name:.value.name, vpc_id:.value.vpc_id, private_ip:.value.private_ip, public_ip:.value.public_ip})")
+  if [[ $(echo -n "${indexed_instances_details}" | jq 'length') -eq 1 ]]; then
+    newline
+    instance_index="0"
+    echo "Connecting ${action} ${context} instance - $(print_instance_detail "${indexed_instances_details}" "${instance_index}")"
+  else
+    print_instance_choice_options "${indexed_instances_details}" "Choose a ${context} instance to connect ${action}."
+    capture_argument_with_default instance_index "Instance" "0"
+  fi
+  instance_details=$(echo -n "${indexed_instances_details}" | jq -r ".[] | select(.index == ${instance_index})")
+  ip_and_bation_usage instance_ip use_bastion "${instance_details}"
+  instance_name=$(echo -n "${indexed_instances_details}" | jq -r ".[] | select(.index == ${instance_index}) | .name")
+  instance_key_pair=$(echo -n "${indexed_instances_details}" | jq -r ".[] | select(.index == ${instance_index}) | .key + \"\"")
+  check_if_is_password_based_access_instance is_password_based_access_instance "${instance_name}"
+  if [[ -z "${instance_key_pair}" ]] || [[ "${is_password_based_access_instance}" == "yes" ]]; then
+    ssh_pass_command="sshpass"
+    ssh_pass_arg="-e"
+    ssh_key_arg=""
+    instance_key=""
+    if [[ -z "${SSHPASS_USER}" ]]; then
+      instance_user instance_user "${instance_name}"
+    else
+      instance_user="${SSHPASS_USER}"
+    fi
+  else
+    ssh_pass_command=""
+    ssh_pass_arg=""
+    ssh_key_arg="-i"
+    lookup_key instance_key "${instance_key_pair}" "${instance_name}"
+    instance_user instance_user "${instance_name}"
+  fi
+  instance_vpc=$(echo -n "${indexed_instances_details}" | jq -r ".[] | select(.index == ${instance_index}) | .vpc_id")
+}
+
+function set_instance_details_in_vars() {
+  local -n instance_ip=${1}
+  local -n instance_key=${2}
+  local -n instance_user=${3}
+  local -n instance_vpc=${4}
+  local -n use_bastion=${5}
+  local -n ssh_pass_command=${6}
+  local -n ssh_pass_arg=${7}
+  local -n ssh_key_arg=${8}
+  local instance_details="${9}"
+  ip_and_bation_usage instance_ip use_bastion "${instance_details}"
+  instance_name=$(echo -n "${instance_details}" | jq -r ".name")
+  instance_key_pair=$(echo -n "${instance_details}" | jq -r ".key + \"\"")
+  check_if_is_password_based_access_instance is_password_based_access_instance "${instance_name}"
+  if [[ -z "${instance_key_pair}" ]] || [[ "${is_password_based_access_instance}" == "yes" ]]; then
+    ssh_pass_command="sshpass"
+    ssh_pass_arg="-e"
+    ssh_key_arg=""
+    instance_key=""
+    if [[ -z "${SSHPASS_USER}" ]]; then
+      instance_user instance_user "${instance_name}"
+    else
+      instance_user="${SSHPASS_USER}"
+    fi
+  else
+    ssh_pass_command=""
+    ssh_pass_arg=""
+    ssh_key_arg="-i"
+    lookup_key instance_key "${instance_key_pair}" "${instance_name}"
+    instance_user instance_user "${instance_name}"
+  fi
+  instance_vpc=$(echo -n "${instance_details}" | jq -r ".vpc_id")
+}
+
+function filter_instances_details() {
+  local -n filtered_instances_details=${1}
+  local instances_details="${2}"
+  filtered_instances_details=$(echo -n "${instances_details}")
+  for search_string in "${@:3}"
+  do
+    filtered_instances_details=$(echo -n "${filtered_instances_details}" | jq -c ". | map(select(.name | ascii_downcase | contains(\"$(echo "${search_string}" | tr '[:upper:]' '[:lower:]')\")))")
+  done
+}
+
+function filter_public_instances_details() {
+  local -n filtered_instances_details=${1}
+  local instances_details="${2}"
+  filtered_instances_details=$(echo -n "${instances_details}" | jq -c '. | map(select(.public_ip))')
+}
+
+function filter_vpc_instances_details() {
+  local -n filtered_instances_details=${1}
+  local instances_details="${2}"
+  local vpc_id="${3}"
+  filtered_instances_details=$(echo -n "${instances_details}" | jq -c ". | map(select(.vpc_id == \"${vpc_id}\"))")
+}
+
+function capture_argument() {
+  local -n argument=${1}
+  local message=${2}
+  newline
+  read -r -p "${message}: " argument
+}
+
+function capture_argument_with_default() {
+  local -n argument=${1}
+  local message=${2}
+  local default_value=${3}
+  newline
+  read -r -p "${message} (${default_value}): " argument
+  argument=${argument:-${default_value}}
+}
+
+function get_key_pair_fingerprint() {
+  local -n key_pair_fingerprint_ref=${1}
+  local -n key_pair_fingerprint_format_ref=${2}
+  local key_pair=${3}
+  key_pair_fingerprint_ref=$(aws ec2 describe-key-pairs --key-names "${key_pair}" | jq -r '.KeyPairs[0].KeyFingerprint')
+  key_pair_fingerprint_format_ref="DER"
+}
+
+function get_key_file_fingerprint() {
+  local -n key_file_fingerprint_ref=${1}
+  local fingerprint_format=${2}
+  local key_file=${3}
+  key_file_fingerprint_ref=""
+  if [[ "${fingerprint_format}" == "MD5" ]]; then
+    key_file_fingerprint_ref=$(ssh-keygen -E MD5 -l -f "${key_file}" | cut -d ' ' -f 2 | sed 's|MD5:||g' || true)
+  elif [[ "${fingerprint_format}" == "DER" ]] && openssl pkcs8 -in "${key_file}" -nocrypt -topk8 -outform DER &> /dev/null; then
+    key_file_fingerprint_ref=$(openssl pkcs8 -in "${key_file}" -nocrypt -topk8 -outform DER | openssl sha1 -c | awk '{print $2}')
+  fi
+}
+
+function lookup_key() {
+  local -n key_path=${1}
+  local key_pair="${2}"
+  local instance_name="${3}"
+  get_key_pair_fingerprint key_pair_fingerprint key_pair_fingerprint_format "${key_pair}"
+  for key_file in $(find "${KEYS_DIR}" -type f -print0 | xargs -0 grep 'PRIVATE' | cut -d ':' -f 1 | sort -u); do
+    get_key_file_fingerprint key_file_fingerprint "${key_pair_fingerprint_format}" "${key_file}"
+    if [[ "${key_pair_fingerprint}" == "${key_file_fingerprint}" ]]; then
+      key_path="${key_file}"
+      break
+    fi
+  done
+  if [[ -z "${key_path-}" ]]; then
+    capture_argument key_path "Path to key for ${instance_name}"
+  fi
+}
+
+function known_user() {
+  local -n known_user_name=${1}
+  local instance_name=$(echo -n "${2}" | tr '[:upper:]' '[:lower:]')
+  known_user_name=""
+}
+
+function instance_user() {
+  local -n user_name=${1}
+  local instance_name="${2}"
+  known_user user_name "${instance_name}"
+  if [[ -z "${user_name-}" ]]; then
+    capture_argument_with_default user_name "User for ${instance_name}" "ubuntu"
+  fi
+}
+
+function choose_bastion() {
+  local -n bastion_ip=${1}
+  local -n bastion_key=${2}
+  local -n bastion_user=${3}
+  local -n bastion_ssh_pass_command=${4}
+  local -n bastion_ssh_pass_arg=${5}
+  local -n bastion_ssh_key_arg=${6}
+  local all_instances_details="${7}"
+  local target_vpc_id="${8}"
+  filter_public_instances_details possible_bastion_instances_details "${all_instances_details}"
+  filter_vpc_instances_details possible_bastion_instances_details "${possible_bastion_instances_details}" "${target_vpc_id}"
+  empty_check "${possible_bastion_instances_details}" "No bastion instances found"
+  select_and_set_instance_details_in_vars bastion_ip bastion_key bastion_user bastion_vpc ignore_use_bastion  \
+    bastion_ssh_pass_command bastion_ssh_pass_arg bastion_ssh_key_arg "${possible_bastion_instances_details}" "bastion" \
+    "through"
+}

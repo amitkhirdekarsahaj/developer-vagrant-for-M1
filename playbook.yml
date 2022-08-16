@@ -1,0 +1,292 @@
+---
+- hosts: none
+  become: true
+  tasks:
+    - name: install-maven
+      apt:
+        name: maven
+        state: present
+    - name: create-terraform-install-dirs
+      file:
+        path: "{{ item }}"
+        state: directory
+      loop:
+        - '/usr/local/bin/terraform_0.12.16'
+    - name: install-terraform
+      include_role:
+        name: diodonfrost.terraform
+      vars:
+        terraform_version: "{{ item.version }}"
+        terraform_path: "{{ item.path }}"
+      loop:
+        - { version: '0.12.16', path: '/usr/local/bin/terraform_0.12.16' }
+    - name: alternatives-for-terraform
+      alternatives:
+        name: terraform
+        link: /usr/local/bin/terraform
+        path: "{{ item.path }}"
+        priority: "{{ item.priority }}"
+      loop:
+        - { path: '/usr/local/bin/terraform_0.12.16/terraform', priority: 1 }
+    - name: install-azure-cli
+      import_role:
+        name: huxoll.azure-cli
+- hosts: all
+  become: true
+  tasks:
+    - name: apt-update
+      apt:
+        update_cache: yes
+    - name: install-pip3
+      apt:
+        name: python3-pip
+        state: present
+    - name: install-ntp
+      apt:
+        name: ntp
+        state: present
+    - name: install-jq
+      apt:
+        name: jq
+        state: present
+    - name: install-python-dev
+      apt:
+        name: python-dev
+        state: present
+    - name: install-python-pip
+      apt:
+        name: python-pip
+        state: present
+    - name: install-zip
+      apt:
+        name: zip
+        state: present
+    - name: install-java
+      apt:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - openjdk-8-jdk
+        - openjdk-11-jdk
+    - name: install-golang
+      import_role:
+        name: gantsign.golang
+      vars:
+        golang_install_dir: "/opt/go"
+    - name: install-scala
+      import_role:
+        name: andrewrothstein.scala
+    - name: install-zsh
+      apt:
+        name: zsh
+        state: present
+    - name: update-pip
+      become: yes
+      become_user: vagrant
+      pip:
+        name: pip
+        extra_args: --user
+        state: latest
+    - name: install docker
+      shell: sudo apt install docker.io
+    - name: install-kubectl
+      become: user
+      become_user: vagrant
+      import_role:
+        name: andrewrothstein.kubectl
+    - name: install-kops
+      get_url:
+        url: https://github.com/kubernetes/kops/releases/download/{{ item.release_context }}/kops-linux-amd64
+        dest: /usr/local/bin/kops-{{ item.version | replace('.','-') }}
+        owner: vagrant
+        group: vagrant
+        mode: 0775
+      loop:
+        - { version: '1.15.0', release_context: '1.15.0' }
+        - { version: '1.15.3', release_context: 'v1.15.3' }
+        - { version: '1.18.3', release_context: 'v1.18.3' }
+        - { version: '1.19.0', release_context: 'v1.19.0' }
+    - name: default-kops-version
+      file:
+        src: /usr/local/bin/kops-1-15-0
+        dest: /usr/local/bin/kops
+        state: link
+        owner: vagrant
+        group: vagrant
+        mode: 0775
+    - name: install-helm
+      include_role:
+        name: andrewrothstein.kubernetes-helm
+      vars:
+        kubernetes_helm_ver: "{{ helm_version_item }}"
+      loop_control:
+        loop_var: helm_version_item
+      loop:
+      - v2.16.1
+      - v3.0.3
+    - name: create-aliases-for-helm
+      become: yes
+      become_user: root
+      file:
+        src: "/usr/local/bin/helm-{{ item.version }}/linux-amd64/helm"
+        dest: "/usr/local/bin/{{ item.alias }}"
+        state: link
+      loop:
+      - { version: 'v2.16.1', alias: 'helm2' }
+      - { version: 'v3.0.3', alias: 'helm3' }
+    - name: install-vault
+      import_role:
+        name: andrewrothstein.vault
+    - name: install-tfswitch
+      shell: tfswitch --version || curl -L https://raw.githubusercontent.com/warrensbox/terraform-switcher/release/install.sh | bash
+    - name: set-java-home
+      lineinfile:
+        path: /etc/environment
+        state: present
+        regexp: '^JAVA_HOME'
+        line: 'JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64/'
+    - name: set-zsh-for-vagrant-user
+      user:
+        name: vagrant
+        shell: /bin/zsh
+    - name: checkout-oh-my-zsh
+      become: yes
+      become_user: vagrant
+      git:
+        repo: 'https://github.com/robbyrussell/oh-my-zsh.git'
+        dest: ~/.oh-my-zsh
+        update: no
+    - name: create-zshrc
+      become: yes
+      become_user: vagrant
+      copy:
+        src: ~/.oh-my-zsh/templates/zshrc.zsh-template
+        dest: ~/.zshrc
+        force: no
+    - name: install-zsh-syntax-highlighting-plugin
+      become: yes
+      become_user: vagrant
+      git:
+        repo: 'https://github.com/zsh-users/zsh-syntax-highlighting'
+        dest: ~/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting
+    - name: install-zsh-autosuggestions-plugin
+      become: yes
+      become_user: vagrant
+      git:
+        repo: 'https://github.com/zsh-users/zsh-autosuggestions'
+        dest: ~/.oh-my-zsh/custom/plugins/zsh-autosuggestions
+    - name: update-zsh-plugins
+      become: yes
+      become_user: vagrant
+      lineinfile:
+        path: ~/.zshrc
+        state: present
+        regexp: '^plugins=\('
+        line: 'plugins=(git aws terraform zsh-syntax-highlighting zsh-autosuggestions)'
+    - name: create-golang-group
+      ansible.builtin.group:
+        name: golang
+        state: present
+    - name: set-goroot
+      lineinfile:
+        path: /etc/environment
+        state: present
+        regexp: '^GOROOT'
+        line: 'GOROOT=/opt/go'
+    - name: set-gopath
+      become: yes
+      become_user: vagrant
+      lineinfile:
+        path: ~/.zshrc
+        state: present
+        regexp: '^ export GOPATH'
+        line: 'export GOPATH=${HOME}/go'
+    - name: update-path-to-include-local-bins
+      become: yes
+      become_user: vagrant
+      lineinfile:
+        path: ~/.zshrc
+        state: present
+        regexp: '^export PATH'
+        line: 'export PATH=${HOME}/.local/bin:${HOME}/bin:${GOROOT}/bin:${GOPATH}/bin:${PATH}'
+    - name: set-lc-all
+      become: yes
+      become_user: vagrant
+      lineinfile:
+        path: ~/.zshrc
+        state: present
+        regexp: '^export LC_ALL'
+        line: 'export LC_ALL="en_US.UTF-8"'
+    - name: set-lc-type
+      become: yes
+      become_user: vagrant
+      lineinfile:
+        path: ~/.zshrc
+        state: present
+        regexp: '^export LC_CTYPE'
+        line: 'export LC_CTYPE="en_US.UTF-8"'
+    - name: install-packer
+      unarchive:
+        src: https://releases.hashicorp.com/packer/1.3.3/packer_1.3.3_linux_amd64.zip
+        dest: /usr/local/bin
+        remote_src: yes
+        creates: /usr/local/bin/packer
+    - name: install-aws-cli
+      become: yes
+      become_user: vagrant
+      pip:
+        name: awscli
+        extra_args: --user
+        executable: pip3
+    - name: install-virtualenv
+      pip:
+        name: virtualenv
+        executable: pip3
+    - name: update-path-to-include-scripts
+      become: yes
+      become_user: vagrant
+      lineinfile:
+        path: ~/.zshrc
+        state: present
+        regexp: '^export PATH="/home/vagrant/scripts:${PATH}"'
+        line: 'export PATH=/home/vagrant/scripts:${PATH}'
+    - name: load-zsh-theme-and-prompt
+      become: yes
+      become_user: vagrant
+      lineinfile:
+        path: ~/.zshrc
+        state: present
+        regexp: '^source /home/vagrant/scripts/zsh-theme-and-prompt.sh'
+        line: 'source /home/vagrant/scripts/zsh-theme-and-prompt.sh'
+    - name: load-environment-variables
+      become: yes
+      become_user: vagrant
+      lineinfile:
+        path: ~/.zshrc
+        state: present
+        regexp: '^source /home/vagrant/scripts/environment-variables.sh'
+        line: 'source /home/vagrant/scripts/environment-variables.sh'
+    - name: load-aliases
+      become: yes
+      become_user: vagrant
+      lineinfile:
+        path: ~/.zshrc
+        state: present
+        regexp: '^source /home/vagrant/scripts/aliases.sh'
+        line: 'source /home/vagrant/scripts/aliases.sh'
+    - name: setup-kubectl-auto-completion-in-zsh
+      become: yes
+      become_user: vagrant
+      lineinfile:
+        path: ~/.zshrc
+        state: present
+        regexp: '^source <(kubectl completion zsh)'
+        line: 'source <(kubectl completion zsh)'
+    - name: setup-aws-auto-completion-in-zsh
+      become: yes
+      become_user: vagrant
+      lineinfile:
+        path: ~/.zshrc
+        state: present
+        regexp: '^source /home/vagrant/.local/bin/aws_zsh_completer.sh'
+        line: 'source /home/vagrant/.local/bin/aws_zsh_completer.sh'
