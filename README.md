@@ -1,9 +1,9 @@
 # Developer Vagrant For M1
 This is developer vagrant setup for M1 chip
 
-What is difference in this repo and vagrant[https://github.com/kaushikchandrashekar/developer-vagrant]?
+What is difference in this repo and [developer_vagrant](https://github.com/kaushikchandrashekar/developer-vagrant)?
 
-This vagrant uses Docker as VM rather than Virtual Box.
+This vagrant uses Docker as VM rather than Virtual Box and is based for macs with m1 chips.
 
 Dockerfile:
 ```
