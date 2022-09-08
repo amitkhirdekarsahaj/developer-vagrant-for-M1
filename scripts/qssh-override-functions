@@ -1,3 +1,79 @@
 #!/bin/bash
-
 set -Eeuo pipefail
+function get_key_pair_fingerprint() {
+  local -n key_pair_fingerprint_ref=${1}
+  local -n key_pair_fingerprint_format_ref=${2}
+  local key_pair=${3}
+  if [[ "${key_pair}" == "kubernetes"* ]]; then
+    key_pair_fingerprint_ref=$(echo -n "${key_pair}" | cut -d '-' -f 5)
+    key_pair_fingerprint_format_ref="MD5"
+  else
+    key_pair_fingerprint_ref=$(aws ec2 describe-key-pairs --key-names "${key_pair}" | jq -r '.KeyPairs[0].KeyFingerprint')
+    key_pair_fingerprint_format_ref="DER"
+  fi
+}
+function check_if_is_password_based_access_instance() {
+  local -n is_password_based_access_instance_ref=${1}
+  local instance_name="${2}"
+  if [[ "${instance_name}" == *"k8s"* ]] && [[ "${instance_name}" == *"sandbox"* ]]; then
+    is_password_based_access_instance_ref="yes"
+  elif [[ "${instance_name}" == *"k8s"* ]] && [[ "${instance_name}" == *"dev"* ]]; then
+    is_password_based_access_instance_ref="yes"
+  elif [[ "${instance_name}" == *"k8s"* ]] && [[ "${instance_name}" == *"qa"* ]]; then
+    is_password_based_access_instance_ref="yes"
+  elif [[ "${instance_name}" == *"k8s"* ]] && [[ "${instance_name}" == *"prod"* ]]; then
+    is_password_based_access_instance_ref="yes"
+  elif [[ "${instance_name}" == "AG-TMAWS-BASTION-Dev" ]]; then
+    is_password_based_access_instance_ref="yes"
+  elif [[ "${instance_name}" == "AG-TML-Mfg-Bastion-PreProd" ]]; then
+    is_password_based_access_instance_ref="yes"
+  elif [[ "${instance_name}" == "AG-TML-Mfg-Bastion-EP-PROD" ]]; then
+    is_password_based_access_instance_ref="yes"
+  elif [[ "${instance_name}" == "AG-TMAWS-BASTION-UnifiedPlaformVPC" ]]; then
+    is_password_based_access_instance_ref="yes"
+  elif [[ "${instance_name}" == "TMLAWSAG_BASTION_HOST-UEP" ]]; then
+    is_password_based_access_instance_ref="yes"
+  elif [[ "${instance_name}" == "TMLAWSAG_Staging-BASTION_HOST-UEP" ]]; then
+    is_password_based_access_instance_ref="yes"
+  else
+    is_password_based_access_instance_ref="no"
+  fi
+}
+function known_user() {
+  local -n known_user_name=${1}
+  local instance_name=$(echo -n "${2}" | tr '[:upper:]' '[:lower:]')
+  if [[ "${instance_name}" == *"bastion"*"dev"* ]]; then
+    known_user_name="ec2-user"
+  elif [[ "${instance_name}" == *"sandbox"* ]]; then
+    known_user_name="ec2-user"
+  elif [[ "${instance_name}" == *"k8s"* ]] && [[ "${instance_name}" == *"qa"* ]]; then
+    known_user_name="admin"
+  elif [[ "${instance_name}" == *"bastion"* ]] || [[ "${instance_name}" == *"k8s"* ]] || [[ "${instance_name}" == *"kafka"* ]] || [[ "${instance_name}" == *"cassandra"* ]] || [[ "${instance_name}" == *"zookeeper"* ]] || [[ "${instance_name}" == *"jenkins"* ]]; then
+    known_user_name="ubuntu"
+  fi
+}
+function choose_bastion() {
+  local -n bastion_ip=${1}
+  local -n bastion_key=${2}
+  local -n bastion_user=${3}
+  local -n bastion_ssh_pass_command=${4}
+  local -n bastion_ssh_pass_arg=${5}
+  local -n bastion_ssh_key_arg=${6}
+  local all_instances_details="${7}"
+  local target_vpc_id="${8}"
+  filter_instances_details possible_bastion_instances_details "${all_instances_details}" "bastion"
+  filter_vpc_instances_details possible_bastion_instances_details "${possible_bastion_instances_details}" "${target_vpc_id}"
+  empty_check "${possible_bastion_instances_details}" "No bastion instances found"
+  select_and_set_instance_details_in_vars bastion_ip bastion_key bastion_user bastion_vpc ignore_use_bastion \
+    bastion_ssh_pass_command bastion_ssh_pass_arg bastion_ssh_key_arg "${possible_bastion_instances_details}" "bastion" \
+    "through"
+}
+function instance_ips() {
+  local -n instance_public_ip=${1}
+  local -n instance_private_ip=${2}
+  local instance_details=${3}
+  instance_public_ip=""
+  instance_name=$(echo -n "${instance_details}" | jq -r ".name")
+  [[ "${instance_name}" == "jenkins-"* ]] || instance_public_ip=$(echo -n "${instance_details}" | jq -r '.public_ip + ""')
+  instance_private_ip=$(echo -n "${instance_details}" | jq -r '.private_ip + ""')
+}

@@ -62,8 +62,14 @@ Changes in Vagrantfile for using docker as VM
   end
 ```
 
-Changed task in playbook.yml for installing docker to
+Added task in playbook.yml
 ```
-- name: install docker
-  shell: sudo apt install docker.io
+- name: install-git
+      apt:
+        name: git-all
+        state: present
+- name: install-curl
+  apt:
+    name: curl
+    state: present
 ```

@@ -1,21 +1,21 @@
 Vagrant.configure("2") do |config|
-  config.vm.box = "ubuntu/bionic64"
-  config.vm.box_version = "20210623.0.0"
+#   config.vm.box = "ubuntu/bionic64"
+#   config.vm.box_version = "20210623.0.0"
   # comment below line if encountering disk size error
   # config.disksize.size = '50GB'
-  config.vm.provider "virtualbox" do |v|
-    # comment below line if using MacOS BigSur or later
-    v.customize [ "modifyvm", :id, "--uartmode1", "disconnected" ]
-    v.memory = 4096
-    v.cpus = 2
-  end
+#   config.vm.provider "virtualbox" do |v|
+#     # comment below line if using MacOS BigSur or later
+#     v.customize [ "modifyvm", :id, "--uartmode1", "disconnected" ]
+#     v.memory = 4096
+#     v.cpus = 2
+#   end
   config.vm.synced_folder "./..", "/home/vagrant/workspace"
   config.vm.synced_folder "./scripts", "/home/vagrant/scripts"
   config.vm.synced_folder "./.terraform.d", "/home/vagrant/.terraform.d"
   config.vm.synced_folder "~/.ssh", "/home/vagrant/.ssh-keys"
-  config.vm.network "forwarded_port", guest: 8080, host: 18080
-  config.vm.network "forwarded_port", guest: 8200, host: 18200
-  config.vm.network "forwarded_port", guest: 8443, host: 18443
+  config.vm.network "forwarded_port", guest: 8080, host: 28080
+  config.vm.network "forwarded_port", guest: 8200, host: 28200
+  config.vm.network "forwarded_port", guest: 8443, host: 28443
   config.vm.provision "ansible_local" do |ansible|
     ansible.verbose = true
     ansible.compatibility_mode = "2.0"

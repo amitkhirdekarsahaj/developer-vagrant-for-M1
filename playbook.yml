@@ -61,6 +61,14 @@
       apt:
         name: zip
         state: present
+    - name: install-git
+      apt:
+        name: git-all
+        state: present
+    - name: install-curl
+      apt:
+        name: curl
+        state: present
     - name: install-java
       apt:
         name: "{{ item }}"
@@ -68,14 +76,14 @@
       loop:
         - openjdk-8-jdk
         - openjdk-11-jdk
-    - name: install-golang
-      import_role:
-        name: gantsign.golang
-      vars:
-        golang_install_dir: "/opt/go"
-    - name: install-scala
-      import_role:
-        name: andrewrothstein.scala
+#    - name: install-golang
+#      import_role:
+#        name: gantsign.golang
+#      vars:
+#        golang_install_dir: "/opt/go"
+#    - name: install-scala
+#      import_role:
+#        name: andrewrothstein.scala
     - name: install-zsh
       apt:
         name: zsh
@@ -87,8 +95,8 @@
         name: pip
         extra_args: --user
         state: latest
-    - name: install docker
-      shell: sudo apt install docker.io
+#    - name: install docker
+#      shell: sudo apt install docker.io
     - name: install-kubectl
       become: user
       become_user: vagrant
