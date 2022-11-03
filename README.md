@@ -5,6 +5,13 @@ What is difference in this repo and [developer_vagrant](https://github.com/kaush
 
 This vagrant uses Docker as VM rather than Virtual Box and is based for macs with m1 chips.
 
+# How to run?
+1. Add environment variable files in the directory
+2. Start docker daemon
+3. `vagrant up` inside this directory
+This should run the docker image and will start the vagrant machine.
+
+# Details about the files in this repo
 Dockerfile:
 ```
 FROM ubuntu:18.04
