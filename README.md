@@ -9,6 +9,7 @@ This vagrant uses Docker as VM rather than Virtual Box and is based for macs wit
 1. Add environment variable files in the directory
 2. Start docker daemon
 3. `vagrant up` inside this directory
+
 This should run the docker image and will start the vagrant machine.
 
 # Details about the files in this repo
